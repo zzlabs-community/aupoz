@@ -26,11 +26,13 @@ export async function GET() {
     },
   });
 
-  // Tipo inferido correctamente desde Prisma
-  type AssetItem = (typeof items)[number];
-
   return NextResponse.json({
-    items: items.map((a: AssetItem) => ({
+    items: items.map((a: {
+      id: string;
+      mime: string | null;
+      size: number | null;
+      createdAt: Date;
+    }) => ({
       id: a.id,
       url: `/api/assets/${a.id}`,
       mime: a.mime,
