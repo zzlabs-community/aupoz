@@ -10,7 +10,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const { id } = await ctx.params;
   const ev = await prisma.calendarEvent.findFirst({ where: { id, userId: sess.user.id }, include: { attachments: { include: { asset: true } } } });
   if (!ev) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json({ id: ev.id, date: ev.date, time: ev.time, title: ev.title, caption: ev.caption, notes: ev.notes, color: ev.color, platform: ev.platform, status: ev.status, linkUrl: ev.linkUrl, hashtags: ev.hashtags, labels: ev.labels, assets: ev.attachments.map(a=> ({ id: a.assetId, url: `/api/assets/${a.assetId}` })) });
+  return NextResponse.json({ id: ev.id, date: ev.date, time: ev.time, title: ev.title, caption: ev.caption, notes: ev.notes, color: ev.color, platform: ev.platform, status: ev.status, linkUrl: ev.linkUrl, hashtags: ev.hashtags, labels: ev.labels, assets: ev.attachments.map((a: { assetId: string }) => ({
+    id: a.assetId,
+    url: `/api/assets/${a.assetId}`,
+  })) });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
