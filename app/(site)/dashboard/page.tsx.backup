@@ -1,0 +1,343 @@
+"use client";
+import { useEffect, useMemo, useState } from "react";
+import CalendarView from "@/src/components/CalendarView";
+
+type Workspace = {
+  id: string;
+  name: string;
+  shopDomain: string;
+  accessToken: string | null;
+  installedAt: string | null;
+};
+
+type Product = {
+  id: string;
+  title: string;
+  handle: string | null;
+  imageUrl: string | null;
+  shopifyId: string;
+  price?: string | null;
+  currency?: string | null;
+};
+
+type Post = {
+  id: string;
+  title: string;
+  content: string;
+  platform: string;
+  createdAt: string;
+};
+
+export default function Dashboard() {
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWs, setSelectedWs] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Record<string, boolean>>({});
+  const [genText, setGenText] = useState<string>("");
+  const [tone, setTone] = useState("friendly");
+  const [platform, setPlatform] = useState("twitter");
+  const [posts, setPosts] = useState<Post[]>([]);
+
+  // Modo de trabajo: libre (sin Shopify) o catálogo
+  const [mode, setMode] = useState<"free" | "catalog">("free");
+  const [freePrompt, setFreePrompt] = useState("");
+  const [freeImage, setFreeImage] = useState<File | null>(null);
+  const [freeImagePreview, setFreeImagePreview] = useState<string>("");
+  const [freeUrl, setFreeUrl] = useState<string>("");
+  const [genImageUrl, setGenImageUrl] = useState<string>("");
+  const [genImages, setGenImages] = useState<string[]>([]);
+  const [tab, setTab] = useState<"studio"|"calendar"|"library">(() => {
+    try { const t = localStorage.getItem('aupoz_tab') as any; if (t==='studio'||t==='calendar'||t==='library') return t; } catch {}
+    return "calendar";
+  });
+  const [calendarMonth, setCalendarMonth] = useState(()=> {
+    try { const s = localStorage.getItem('cal_month'); if (s) { const [y,m] = s.split('-').map(Number); return new Date(y, m-1, 1); } } catch {}
+    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [calendar, setCalendar] = useState<any[]>([]);
+  const [imageSize, setImageSize] = useState<string>("1024x1024");
+  const ws = useMemo(() => workspaces.find(w => w.id === selectedWs), [workspaces, selectedWs]);
+  const [aiMode, setAiMode] = useState<"real" | "mock">("mock");
+  const [me, setMe] = useState<{ email: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/workspaces", { credentials: 'include' }).then(r => r.json()).then((list: Workspace[]) => {
+      // Deja limpio: solo válidos y conectados por omisión
+      const cleaned = (Array.isArray(list) ? list : []).filter(w => !!w.accessToken && !w.shopDomain.endsWith(".invalid"));
+      setWorkspaces(cleaned);
+    }).catch(() => {});
+    fetch("/api/config", { credentials: 'include' }).then(r=>r.json()).then(d=>{ if(d?.ai === 'real' || d?.ai === 'mock') setAiMode(d.ai); }).catch(()=>{});
+    fetch("/api/auth/me", { credentials: 'include' }).then(async r=> r.ok ? r.json() : null).then(u=> setMe(u? { email: u.email } : null)).catch(()=>{});
+  }, []);
+
+  function defaultSizeFor(p: string) {
+    switch (p) {
+      case "twitter":
+      case "linkedin":
+      case "facebook":
+        return "1792x1024"; // aprox 16:9
+      case "tiktok":
+        return "1024x1792"; // 9:16
+      case "instagram":
+      default:
+        return "1024x1024"; // 1:1
+    }
+  }
+
+  useEffect(() => { setImageSize(defaultSizeFor(platform)); }, [platform]);
+
+  useEffect(() => {
+    if (!selectedWs) return;
+    loadProducts();
+    loadPosts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWs]);
+
+  async function loadProducts(q?: string) {
+    if (!selectedWs) return;
+    setLoading(true);
+    try {
+      const url = new URL(location.origin + "/api/products");
+      url.searchParams.set("workspaceId", selectedWs);
+      url.searchParams.set("take", "20");
+      if (q) url.searchParams.set("q", q);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      const data = await res.json();
+      setProducts(data.items || []);
+      setSelectedProducts({});
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function syncProducts() {
+    if (!ws) return;
+    setLoading(true);
+    try {
+      const url = new URL(location.origin + "/api/shopify/sync-products");
+      url.searchParams.set("shop", ws.shopDomain);
+      url.searchParams.set("limit", "50");
+      const res = await fetch(url.toString(), { method: "POST", credentials: 'include' });
+      if (!res.ok) throw new Error("sync failed");
+      await loadProducts();
+    } finally { setLoading(false); }
+  }
+
+  async function generateCatalog() {
+    if (!ws) return;
+    const ids = Object.entries(selectedProducts).filter(([,v])=>v).map(([k])=>k);
+    if (!ids.length) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: ws.id, productIds: ids, tone, platform }),
+        credentials: 'include'
+      });
+      const data = await res.json();
+      setGenText(data.text || "");
+    } finally { setLoading(false); }
+  }
+
+  async function generateFree() {
+    if (!freePrompt && !freeImage && !freeUrl) return;
+    setLoading(true);
+    try {
+      const form = new FormData();
+      if (freePrompt) form.append("prompt", freePrompt);
+      form.append("tone", tone);
+      form.append("platform", platform);
+      if (freeUrl) form.append("productUrl", freeUrl);
+      if (freeImage) form.append("image", freeImage);
+      const res = await fetch("/api/generate", { method: "POST", body: form, credentials: 'include' });
+      const data = await res.json();
+      setGenText(data.text || data.error || "");
+      // try to generate an image too
+      const imgForm = new FormData();
+      const promptFromModel = data.imagePrompt || freePrompt || data.text || "imagen para post";
+      imgForm.append("prompt", promptFromModel);
+      imgForm.append("size", imageSize);
+      if (freeImage) imgForm.append("image", freeImage);
+      const ir = await fetch("/api/generate-image", { method: "POST", body: imgForm, credentials: 'include' });
+      const j = await ir.json().catch(()=>null);
+      if (j?.url) { setGenImageUrl(j.url); setGenImages(prev=> [j.url, ...prev].slice(0,12)); }
+    } finally { setLoading(false); }
+  }
+
+  async function regenerateImage() {
+    const imgForm = new FormData();
+    imgForm.append("prompt", freePrompt || genText || "imagen para post");
+    imgForm.append("size", imageSize);
+    if (freeImage) imgForm.append("image", freeImage);
+    const ir = await fetch("/api/generate-image", { method: "POST", body: imgForm, credentials: 'include' });
+    const j = await ir.json().catch(()=>null);
+    if (j?.url) { setGenImageUrl(j.url); setGenImages(prev=> [j.url, ...prev].slice(0,12)); }
+  }
+  useEffect(() => { if (tab === "library") loadAssets(); }, [tab]);
+  useEffect(() => { if (tab === "calendar") loadCalendar(); }, [tab, calendarMonth]);
+  useEffect(() => { try { localStorage.setItem('aupoz_tab', tab); } catch {} }, [tab]);
+  useEffect(() => { try { const y = calendarMonth.getFullYear(); const m = String(calendarMonth.getMonth()+1).padStart(2,'0'); localStorage.setItem('cal_month', `${y}-${m}`); } catch {} }, [calendarMonth]);
+
+  async function loadAssets() {
+    const r = await fetch("/api/assets", { credentials: 'include' });
+    if (r.ok) {
+      const j = await r.json();
+      setGenImages((j.items||[]).map((a:any)=>a.url));
+    }
+  }
+
+  async function loadCalendar() {
+    const from = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const to = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth()+1, 0);
+    const url = new URL(location.origin + "/api/calendar");
+    url.searchParams.set("from", from.toISOString());
+    url.searchParams.set("to", to.toISOString());
+    const r = await fetch(url, { credentials: 'include' });
+    if (r.ok) {
+      const j = await r.json();
+      setCalendar(j.items||[]);
+    }
+  }
+
+  async function createEvent(dateIso: string, title: string, notes?: string, color?: string, assetIds?: string[]) {
+    const r = await fetch('/api/calendar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date: dateIso, title, notes, color, assetIds }), credentials: 'include' });
+    if (r.ok) await loadCalendar();
+  }
+
+  async function deleteEvent(id: string) {
+    const url = new URL(location.origin + '/api/calendar'); url.searchParams.set('id', id);
+    const r = await fetch(url, { method: 'DELETE', credentials: 'include' });
+    if (r.ok) await loadCalendar();
+  }
+
+  async function moveEvent(id: string, newDateIso: string) {
+    const r = await fetch(`/api/calendar/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date: newDateIso }), credentials: 'include' });
+    if (r.ok) await loadCalendar();
+  }
+
+  function handleGenerate() {
+    if (mode === "catalog") return generateCatalog();
+    return generateFree();
+  }
+
+  function onSelectImage(file: File | null) {
+    setFreeImage(file);
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setFreeImagePreview(url);
+    } else {
+      setFreeImagePreview("");
+    }
+  }
+
+  async function copyToClipboard() {
+    if (!genText) return;
+    try {
+      await navigator.clipboard.writeText(genText);
+      alert("Copiado al portapapeles");
+    } catch { /* noop */ }
+  }
+
+  function downloadTxt() {
+    if (!genText) return;
+    const blob = new Blob([genText], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `post-${platform}.txt`;
+    a.click();
+  }
+
+  async function savePost() {
+    if (!ws || !genText) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `Post ${platform}`, content: genText, platform, workspaceId: ws.id }),
+        credentials: 'include'
+      });
+      if (res.ok) alert("Post guardado");
+      await loadPosts();
+    } finally { setLoading(false); }
+  }
+
+  async function loadPosts() {
+    if (!selectedWs) return;
+    const res = await fetch(`/api/posts?workspaceId=${selectedWs}&take=20`, { credentials: 'include' });
+    const data = await res.json();
+    setPosts(Array.isArray(data) ? data : []);
+  }
+
+  async function deletePost(id: string) {
+    if (!confirm("¿Eliminar este post?")) return;
+    const res = await fetch(`/api/posts/${id}`, { method: "DELETE", credentials: 'include' });
+    if (res.ok) setPosts(prev => prev.filter(p => p.id !== id));
+  }
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto space-y-6 text-zinc-200">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Panel – Aupoz</h1>
+        <div className="flex items-center gap-3">
+          {me && <span className="text-xs px-2 py-1 rounded border border-white/10 bg-white/5">Sesión: {me.email}</span>}
+          <span className="text-xs px-2 py-1 rounded border border-white/10 bg-white/5">IA: {aiMode === 'real' ? 'Real' : 'Mock'}</span>
+          <form action="/api/auth/signout" method="post">
+            <button className="meta-btn-ghost text-xs" type="submit">Salir</button>
+          </form>
+        </div>
+      </div>
+
+      {/* Tabs principales del panel */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1 rounded-lg bg-white/5 p-1 border border-white/10">
+          <button onClick={()=>setTab("studio")} className={`px-3 py-1.5 text-sm rounded-md ${tab==='studio'?'bg-white/10 text-white':'text-zinc-300'}`}>Generador</button>
+          <button onClick={()=>setTab("calendar")} className={`px-3 py-1.5 text-sm rounded-md ${tab==='calendar'?'bg-white/10 text-white':'text-zinc-300'}`}>Calendario</button>
+          <button onClick={()=>setTab("library")} className={`px-3 py-1.5 text-sm rounded-md ${tab==='library'?'bg-white/10 text-white':'text-zinc-300'}`}>Biblioteca</button>
+        </div>
+      </div>
+
+      {tab === 'studio' && (
+        <div className="flex gap-2">
+          <button className={`meta-tab ${mode === "free" ? "active" : ""}`} onClick={()=>setMode("free")}>Generar (Libre)</button>
+          <button className={`meta-tab ${mode === "catalog" ? "active" : ""}`} onClick={()=>setMode("catalog")}>Catálogo (Shopify)</button>
+        </div>
+      )}
+
+      {tab === 'studio' && mode === "catalog" && (
+        <section className="space-y-2 meta-panel p-4">
+          <label className="block text-sm">Workspace</label>
+          <select
+            className="meta-input w-full max-w-md"
+            value={selectedWs}
+            onChange={(e)=>setSelectedWs(e.target.value)}
+          >
+            <option value="">Selecciona un workspace…</option>
+            {workspaces.map(w=> (
+              <option key={w.id} value={w.id}>{w.name} ({w.shopDomain}) ✅</option>
+            ))}
+          </select>
+          {ws && (
+            <div className="flex gap-2 items-center text-sm text-zinc-400">
+              <a className="underline" href={`/api/shopify/install?shop=${ws.shopDomain}`}>Gestionar en Shopify</a>
+              <button className="meta-btn-ghost" onClick={syncProducts} disabled={loading}>Sincronizar productos</button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {tab === 'studio' && mode === "catalog" && ws && (
+        <section className="space-y-3 meta-panel p-4">
+          <div className="flex items-end gap-2">
+            <input placeholder="Buscar productos" className="meta-input" onKeyDown={(e)=>{ if(e.key==='Enter') loadProducts((e.target as HTMLInputElement).value); }} />
+            <button className="meta-btn-ghost" onClick={()=>loadProducts()}>Limpiar</button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {products.map(p => (
+              <label key={p.id} className="flex items-center gap-3 meta-item">
+                <input type="checkbox" checked={!!selectedProducts[p.id]} onChange={(e)=> setSelectedProducts(prev=> ({...prev, [p.id]: e.target.checked}))} />
+                <div className="flex-1">
+                  <div className="font-medium">{p.title}</div>
+                  <div className="text-xs text-zinc-500">#{p.shopifyId} {p.handle?`• ${p.handle}`

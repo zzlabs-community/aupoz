@@ -1,0 +1,335 @@
+// AUPOZ Production-Ready Multi-Tenant Schema
+// Companies with domain scanning (no Shopify)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Platform enum for social media
+enum Platform {
+  instagram
+  twitter
+  linkedin
+  facebook
+  tiktok
+  youtube
+  pinterest
+}
+
+// Content status enum
+enum ContentStatus {
+  idea
+  draft
+  scheduled
+  published
+  archived
+}
+
+// Campaign type enum
+enum CampaignType {
+  carousel
+  single_post
+  story
+  reel
+  video
+}
+
+// Automation trigger types
+enum TriggerType {
+  new_product
+  schedule
+  manual
+  low_stock
+  price_change
+}
+
+// ============================================
+// COMPANY (Replaces Workspace - max 5 per user)
+// ============================================
+
+model Company {
+  id           String   @id @default(cuid())
+  name         String
+  domain       String   // e.g., "example.com"
+  
+  // Company info (scraped by AI)
+  description  String?  @db.Text
+  industry     String?
+  products     String?  @db.Text // AI extracted products/services
+  targetAudience String? @db.Text
+  brandColors  String[]
+  socialLinks  Json     // { twitter, instagram, linkedin, facebook }
+  
+  // Scanning status
+  isScanned    Boolean  @default(false)
+  scannedAt    DateTime?
+  
+  // Shopify integration (optional)
+  accessToken  String?
+  installedAt  DateTime?
+  
+  // Relations
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  brandProfile BrandProfile?
+  posts        Post[]
+  campaigns    Campaign[]
+  automations  AutomationRule[]
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  @@unique([userId, domain])
+  @@index([userId])
+}
+
+// ============================================
+// BRAND PROFILE (per Company)
+// ============================================
+
+model BrandProfile {
+  id              String   @id @default(cuid())
+  companyId       String   @unique
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Brand analysis outputs (from AI domain scan)
+  brandVoice      String   @db.Text
+  targetAudience  String   @db.Text
+  style           String   @db.Text
+  positioning    String   @db.Text
+  keyMessages     String[]
+  colorPalette    String[]
+  tone            String
+  
+  // Analysis metadata
+  analyzedAt      DateTime @default(now())
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// POSTS (Calendar items per Company)
+// ============================================
+
+model Post {
+  id           String   @id @default(cuid())
+  title        String
+  
+  // Content
+  caption      String   @db.Text
+  imageUrl     String?
+  imagePrompt  String?  @db.Text
+  hashtags     String[]
+  
+  // Scheduling
+  platform     Platform
+  scheduledAt  DateTime?
+  publishedAt  DateTime?
+  
+  // Status
+  status       ContentStatus @default(draft)
+  
+  // Relations
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Campaign link
+  campaignId   String?
+  campaign     Campaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  @@index([companyId, scheduledAt])
+  @@index([companyId, status])
+}
+
+// ============================================
+// CAMPAIGNS (per Company)
+// ============================================
+
+model Campaign {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?  @db.Text
+  
+  // Campaign type and content
+  campaignType  CampaignType
+  content       Json     // { slides, caption, hashtags, cta, visual_style_desc }
+  
+  // Status
+  status        ContentStatus @default(draft)
+  
+  // Relations
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  posts         Post[]
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([companyId])
+}
+
+// ============================================
+// AUTOMATION RULES (per Company)
+// ============================================
+
+model AutomationRule {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?  @db.Text
+  
+  // Trigger configuration
+  triggerType  TriggerType
+  triggerConfig Json     // { schedule, conditions }
+  
+  // Action configuration
+  actionConfig Json      // { campaignType, platforms, count }
+  
+  // Rule status
+  isActive     Boolean  @default(true)
+  priority     Int      @default(0)
+  
+  // Relations
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Execution log
+  lastExecutedAt DateTime?
+  executionCount Int    @default(0)
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  @@index([companyId, isActive])
+}
+
+// ============================================
+// ASSETS (Binary storage)
+// ============================================
+
+model Asset {
+  id         String   @id @default(cuid())
+  mime       String
+  bytes      Bytes
+  size       Int
+  width      Int?
+  height     Int?
+  sha256     String   @unique
+  createdAt  DateTime @default(now())
+  
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  generations    Generation[]
+  calendarLinks  CalendarEventAsset[]
+}
+
+// ============================================
+// GENERATIONS (AI generation history)
+// ============================================
+
+model Generation {
+  id          String   @id @default(cuid())
+  platform    String?
+  size        String?
+  caption     String
+  imagePrompt String?
+  
+  assetId     String?
+  asset       Asset?   @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  createdAt   DateTime @default(now())
+}
+
+// ============================================
+// USER & AUTH
+// ============================================
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  
+  sessions     Session[]
+  assets       Asset[]
+  generations  Generation[]
+  calendar     CalendarEvent[]
+  settings     UserSetting[]
+  companies    Company[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model UserSetting {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  provider  String   @default("openai")
+  model     String   @default("gpt-4o-mini")
+  apiKeyEnc String
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+// ============================================
+// CALENDAR EVENTS
+// ============================================
+
+model CalendarEvent {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date       DateTime
+  time       String?
+  title      String
+  caption    String?  @db.Text
+  notes      String?  @db.Text
+  color      String   @default("sky")
+  platform   Platform?
+  status     ContentStatus @default(draft)
+  linkUrl    String?
+  hashtags   String?
+  labels     String[]
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  attachments CalendarEventAsset[]
+  
+  @@index([userId, date])
+}
+
+model CalendarEventAsset {
+  eventId String
+  assetId String
+  event   CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  asset   Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  
+  @@id([eventId, assetId])
+}

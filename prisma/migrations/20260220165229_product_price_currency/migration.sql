@@ -1,0 +1,2 @@
+ALTER TABLE "Product" ADD COLUMN "price" NUMERIC(12,2);
+ALTER TABLE "Product" ADD COLUMN "currency" TEXT;
