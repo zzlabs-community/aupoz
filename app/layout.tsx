@@ -17,6 +17,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "AUPOZ — AI Content Studio",
   description: "AUPOZ: generación de contenido y visuales con IA para marcas. Creado por ZZLABZ.",
+  icons: {
+    icon: {
+      url: "/faviconn.png",
+      sizes: "128x128",
+      type: "image/png",
+    },
+  },
 };
 
 export default async function RootLayout({

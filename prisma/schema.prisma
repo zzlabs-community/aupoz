@@ -45,6 +45,9 @@ enum TriggerType {
   manual
   low_stock
   price_change
+  ai_content
+  engagement
+  trending
 }
 
 // ============================================

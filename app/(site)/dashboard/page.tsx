@@ -6,7 +6,10 @@ import CalendarView from "@/src/components/CalendarView";
 type Workspace = {
   id: string;
   name: string;
-  shopDomain: string;
+  domain: string;
+  description: string | null;
+  industry: string | null;
+  isScanned: boolean;
   accessToken: string | null;
   installedAt: string | null;
 };
@@ -23,8 +26,10 @@ type Campaign = {
   id: string;
   name: string;
   campaignType: string;
+  content: any;
   status: string;
   createdAt: string;
+  updatedAt: string;
 };
 
 type AutomationRule = {
@@ -77,9 +82,25 @@ export default function Dashboard() {
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newCompanyDomain, setNewCompanyDomain] = useState("");
 
+  // Campaign management state
+  const [campaignType, setCampaignType] = useState<string>("carousel");
+  const [campaignPlatform, setCampaignPlatform] = useState<string>("instagram");
+  const [currentCampaign, setCurrentCampaign] = useState<any>(null);
+  const [campaignPrompt, setCampaignPrompt] = useState<string>("");
+  const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
+  const [campaignFilter, setCampaignFilter] = useState<"all" | "draft" | "published" | "archived">("all");
+  const [campaignSearch, setCampaignSearch] = useState<string>("");
+  
+  // Automation trigger types
+  const [automationTriggerType, setAutomationTriggerType] = useState<string>("manual");
+
+  // Analytics state
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false);
+
   useEffect(() => {
     fetch("/api/workspaces", { credentials: 'include' }).then(r => r.json()).then((list: Workspace[]) => {
-      const cleaned = (Array.isArray(list) ? list : []).filter(w => !!w.accessToken && !w.shopDomain.endsWith(".invalid"));
+      const cleaned = (Array.isArray(list) ? list : []);
       setWorkspaces(cleaned);
     }).catch(() => {});
     fetch("/api/config", { credentials: 'include' }).then(r=>r.json()).then(d=>{ if(d?.ai === 'real' || d?.ai === 'mock') setAiMode(d.ai); }).catch(()=>{});
@@ -292,6 +313,30 @@ export default function Dashboard() {
     }
   }
 
+  async function loadAnalytics() {
+    if (!selectedWs) return;
+    const res = await fetch(`/api/analytics?companyId=${selectedWs}&type=all`, { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      setAnalytics(data);
+    }
+  }
+
+  async function loadAIAnalysis() {
+    if (!ws) return;
+    setAiAnalysisLoading(true);
+    try {
+      const res = await fetch(`/api/analytics?companyId=${ws.id}&type=trends`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setAnalytics(data);
+        alert("Analisis de tendencias completado");
+      }
+    } finally {
+      setAiAnalysisLoading(false);
+    }
+  }
+
   async function analyzeBrand() {
     if (!ws) return;
     setLoading(true);
@@ -313,18 +358,53 @@ export default function Dashboard() {
   async function generateCampaign() {
     if (!ws) return;
     setLoading(true);
+    setCurrentCampaign(null);
+    setSelectedCampaign(null);
     try {
       const res = await fetch("/api/generate-campaign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId: ws.id, campaignType: "carousel", platform: "instagram" }),
+        body: JSON.stringify({ 
+          companyId: ws.id, 
+          campaignType, 
+          platform: campaignPlatform,
+          prompt: campaignPrompt || undefined
+        }),
         credentials: 'include'
       });
+      const data = await res.json();
       if (res.ok) {
+        setCurrentCampaign(data);
         await loadCampaigns();
-        alert("Campaña generada");
+      } else {
+        alert(data.error || "Error generando campaña");
       }
     } finally { setLoading(false); }
+  }
+
+  async function updateCampaignStatus(id: string, status: string) {
+    const res = await fetch(`/api/campaigns/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+      credentials: 'include'
+    });
+    if (res.ok) {
+      await loadCampaigns();
+      alert("Estado actualizado");
+    }
+  }
+
+  async function deleteCampaign(id: string) {
+    if (!confirm("¿Eliminar esta campaña?")) return;
+    const res = await fetch(`/api/campaigns/${id}`, {
+      method: "DELETE",
+      credentials: 'include'
+    });
+    if (res.ok) {
+      await loadCampaigns();
+      setSelectedCampaign(null);
+    }
   }
 
   async function generateMonth() {
@@ -388,7 +468,7 @@ export default function Dashboard() {
       });
       if (res.ok) {
         const created = await res.json();
-        setWorkspaces(prev => [...prev, { ...created, accessToken: null, shopDomain: created.domain, installedAt: null }]);
+        setWorkspaces(prev => [...prev, { ...created, accessToken: null, domain: created.domain, installedAt: null }]);
         setSelectedWs(created.id);
         setShowNewCompany(false);
         setNewCompanyName("");
@@ -402,11 +482,70 @@ export default function Dashboard() {
     }
   }
 
+  async function deleteCompany(id: string) {
+    if (!confirm("¿Estás seguro de que quieres eliminar este workspace? Esta acción no se puede deshacer.")) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/workspaces?id=${id}`, { method: "DELETE", credentials: 'include' });
+      if (res.ok) {
+        setWorkspaces(prev => prev.filter(w => w.id !== id));
+        if (selectedWs === id) setSelectedWs("");
+        alert("Workspace eliminado");
+      }
+    } finally { setLoading(false); }
+  }
+
+  // Filter and search campaigns
+  const filteredCampaigns = useMemo(() => {
+    let result = campaigns;
+    if (campaignFilter !== "all") {
+      result = result.filter(c => c.status === campaignFilter);
+    }
+    if (campaignSearch) {
+      const search = campaignSearch.toLowerCase();
+      result = result.filter(c => 
+        c.name?.toLowerCase().includes(search) || 
+        c.campaignType?.toLowerCase().includes(search)
+      );
+    }
+    return result;
+  }, [campaigns, campaignFilter, campaignSearch]);
+
+  // Get campaign stats
+  const campaignStats = useMemo(() => ({
+    total: campaigns.length,
+    draft: campaigns.filter(c => c.status === 'draft').length,
+    published: campaigns.filter(c => c.status === 'published').length,
+    archived: campaigns.filter(c => c.status === 'archived').length,
+  }), [campaigns]);
+
+  // Format campaign type for display
+  const formatCampaignType = (type: string) => {
+    const types: Record<string, string> = {
+      carousel: 'Carrusel',
+      single_post: 'Post Individual',
+      story: 'Historia',
+      reel: 'Reel',
+      video: 'Video'
+    };
+    return types[type] || type;
+  };
+
+  // Get status color
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'published': return 'bg-green-600';
+      case 'draft': return 'bg-yellow-600';
+      case 'archived': return 'bg-gray-600';
+      default: return 'bg-zinc-600';
+    }
+  };
+
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6 text-zinc-200">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Panel – Aupoz</h1>
-        <div className="flex items-center gap-3">
+    <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4 md:space-y-6 text-zinc-200">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <h1 className="text-xl md:text-2xl font-semibold">Panel – Aupoz</h1>
+        <div className="flex flex-wrap items-center gap-2 md:gap-3">
           {me && <span className="text-xs px-2 py-1 rounded border border-white/10 bg-white/5">Sesión: {me.email}</span>}
           <span className="text-xs px-2 py-1 rounded border border-white/10 bg-white/5">IA: {aiMode === 'real' ? 'Real' : 'Mock'}</span>
           <form action="/api/auth/signout" method="post">
@@ -415,8 +554,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="flex gap-1 rounded-lg bg-white/5 p-1 border border-white/10 overflow-x-auto">
+      <div className="overflow-x-auto">
+        <div className="flex gap-1 rounded-lg bg-white/5 p-1 border border-white/10 min-w-max">
           <button onClick={()=>setTab("studio")} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${tab==='studio'?'bg-white/10 text-white':'text-zinc-300'}`}>Generador</button>
           <button onClick={()=>setTab("calendar")} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${tab==='calendar'?'bg-white/10 text-white':'text-zinc-300'}`}>Calendario</button>
           <button onClick={()=>setTab("campaigns")} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${tab==='campaigns'?'bg-white/10 text-white':'text-zinc-300'}`}>Campañas</button>
@@ -428,7 +567,7 @@ export default function Dashboard() {
 
       {tab === 'studio' && (
         <section className="space-y-4 meta-panel p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <label className="block text-sm">Workspace</label>
             <button 
               onClick={() => setShowNewCompany(true)}
@@ -444,7 +583,7 @@ export default function Dashboard() {
           >
             <option value="">Selecciona un workspace…</option>
             {workspaces.map(w=> (
-              <option key={w.id} value={w.id}>{w.name} ({w.shopDomain})</option>
+              <option key={w.id} value={w.id}>{w.name} ({w.domain})</option>
             ))}
           </select>
           
@@ -463,7 +602,7 @@ export default function Dashboard() {
                 value={newCompanyDomain}
                 onChange={(e) => setNewCompanyDomain(e.target.value)}
               />
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <button 
                   onClick={createNewCompany}
                   disabled={loading || !newCompanyName || !newCompanyDomain}
@@ -477,6 +616,34 @@ export default function Dashboard() {
                 >
                   Cancelar
                 </button>
+              </div>
+            </div>
+          )}
+          
+          {workspaces.length > 0 && (
+            <div className="mt-4 space-y-2">
+              <h3 className="text-sm font-medium text-zinc-400">Tus Workspaces</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {workspaces.map(w => (
+                  <div 
+                    key={w.id} 
+                    className={`p-3 rounded-lg border ${selectedWs === w.id ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-white/10 bg-white/5'} cursor-pointer hover:bg-white/10 transition-colors`}
+                    onClick={() => setSelectedWs(w.id)}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{w.name}</p>
+                        <p className="text-xs text-zinc-400 truncate">{w.domain}</p>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteCompany(w.id); }}
+                        className="text-xs text-red-400 hover:text-red-300 ml-2 px-2 py-1 rounded hover:bg-red-500/20"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -564,14 +731,14 @@ export default function Dashboard() {
               </div>
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleGenerate}
                 disabled={loading || (!freePrompt && !freeImage && !freeUrl)}
                 className="meta-btn-primary"
               >
                 {loading ? (
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center justify-center gap-2">
                     <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -606,7 +773,7 @@ export default function Dashboard() {
                   <div className="mb-4">
                     <label className="block text-xs text-zinc-400 mb-1">Texto generado:</label>
                     <div className="p-3 bg-white/5 rounded text-sm whitespace-pre-wrap">{genText}</div>
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
                       <button onClick={copyToClipboard} className="meta-btn-ghost text-xs">Copiar texto</button>
                       <button onClick={downloadTxt} className="meta-btn-ghost text-xs">Descargar</button>
                       <button onClick={savePost} disabled={!ws} className="meta-btn-ghost text-xs">Guardar post</button>
@@ -643,7 +810,7 @@ export default function Dashboard() {
       {tab === "library" && (
         <section className="meta-panel p-4 space-y-4">
           <h2 className="text-lg font-medium">Biblioteca de imágenes</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {genImages.map((url, i) => (
               <div key={i} className="aspect-square overflow-hidden rounded-lg border border-white/10">
                 <img
@@ -659,35 +826,282 @@ export default function Dashboard() {
 
       {tab === "campaigns" && (
         <section className="space-y-4">
-          <div className="meta-panel p-4 flex justify-between items-center">
-            <h2 className="text-xl font-medium">Campañas</h2>
-            <div className="flex gap-2">
-              <select className="meta-input" value={selectedWs} onChange={(e)=>setSelectedWs(e.target.value)}>
-                <option value="">Selecciona workspace...</option>
-                {workspaces.map(w=> <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
-              <button onClick={generateCampaign} disabled={!ws || loading} className="meta-btn-primary">
-                {loading ? 'Generando...' : 'Nueva Campaña'}
+          {/* Campaign Generator Form */}
+          <div className="meta-panel p-4">
+            <h2 className="text-lg md:text-xl font-medium mb-4">Generar Campaña con IA</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+              <div>
+                <label className="block text-sm mb-2">Workspace</label>
+                <select 
+                  className="meta-input w-full" 
+                  value={selectedWs} 
+                  onChange={(e)=>setSelectedWs(e.target.value)}
+                >
+                  <option value="">Selecciona workspace...</option>
+                  {workspaces.map(w=> <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-2">Tipo de Campaña</label>
+                <select 
+                  className="meta-input w-full" 
+                  value={campaignType} 
+                  onChange={(e)=>setCampaignType(e.target.value)}
+                >
+                  <option value="carousel">Carrusel</option>
+                  <option value="single_post">Post Individual</option>
+                  <option value="story">Historia</option>
+                  <option value="reel">Reel</option>
+                  <option value="video">Video</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-2">Plataforma</label>
+                <select 
+                  className="meta-input w-full" 
+                  value={campaignPlatform} 
+                  onChange={(e)=>setCampaignPlatform(e.target.value)}
+                >
+                  <option value="instagram">Instagram</option>
+                  <option value="twitter">Twitter/X</option>
+                  <option value="linkedin">LinkedIn</option>
+                  <option value="facebook">Facebook</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="pinterest">Pinterest</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-2">Instrucciones (opcional)</label>
+                <input
+                  type="text"
+                  className="meta-input w-full"
+                  placeholder="Instrucciones especiales..."
+                  value={campaignPrompt}
+                  onChange={(e) => setCampaignPrompt(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="mt-4">
+              <button 
+                onClick={generateCampaign} 
+                disabled={!ws || loading} 
+                className="meta-btn-primary w-full md:w-auto"
+              >
+                {loading ? 'Generando con IA...' : '🚀 Generar Campaña con IA'}
               </button>
             </div>
           </div>
-          
-          {campaigns.length === 0 ? (
-            <div className="meta-panel p-8 text-center text-zinc-400">
-              No hay campañas. Selecciona un workspace y crea una campaña.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {campaigns.map(c => (
-                <div key={c.id} className="meta-panel p-4">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-medium">{c.name || 'Campaña sin nombre'}</h3>
-                    <span className={`text-xs px-2 py-1 rounded ${c.status === 'published' ? 'bg-green-600' : 'bg-yellow-600'}`}>{c.status}</span>
-                  </div>
-                  <p className="text-sm text-zinc-400">{c.campaignType}</p>
-                  <p className="text-xs text-zinc-500 mt-2">{new Date(c.createdAt).toLocaleDateString()}</p>
+
+          {/* Generated Campaign Result */}
+          {currentCampaign && (
+            <div className="meta-panel p-4 space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <h3 className="text-lg font-medium text-cyan-400">Campaña Generada</h3>
+                <div className="flex flex-wrap gap-2">
+                  <button 
+                    onClick={() => { setCurrentCampaign(null); setSelectedCampaign(null); }}
+                    className="meta-btn-ghost text-xs"
+                  >
+                    Cerrar
+                  </button>
                 </div>
-              ))}
+              </div>
+              
+              {/* Caption */}
+              {currentCampaign.caption && (
+                <div className="p-3 bg-white/5 rounded">
+                  <label className="block text-xs text-zinc-400 mb-1">Caption:</label>
+                  <p className="text-sm whitespace-pre-wrap">{currentCampaign.caption}</p>
+                  {currentCampaign.hashtags && currentCampaign.hashtags.length > 0 && (
+                    <p className="text-xs text-cyan-400 mt-2">{currentCampaign.hashtags.join(' ')}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Slides for Carousel */}
+              {currentCampaign.slides && currentCampaign.slides.length > 0 && (
+                <div className="space-y-3">
+                  <label className="block text-sm text-zinc-400">Slides ({currentCampaign.slides.length}):</label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                    {currentCampaign.slides.map((slide: any, idx: number) => (
+                      <div key={idx} className="p-3 bg-white/5 rounded border border-white/10">
+                        <div className="text-xs text-cyan-400 mb-1">Slide {idx + 1}</div>
+                        <p className="text-sm font-medium">🎯 {slide.hook}</p>
+                        <p className="text-sm mt-1"><span className="text-purple-400">📣</span> {slide.headline}</p>
+                        <p className="text-xs text-zinc-400 mt-1">{slide.body}</p>
+                        <p className="text-xs text-zinc-500 mt-2">🖼️ {slide.image_prompt}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* CTA */}
+              {currentCampaign.cta && (
+                <div className="p-3 bg-purple-500/10 rounded border border-purple-500/30">
+                  <span className="text-sm text-purple-400">CTA: </span>
+                  <span className="text-sm">{currentCampaign.cta}</span>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Campaign Stats */}
+          {campaigns.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="meta-panel p-3 text-center">
+                <p className="text-2xl font-bold text-cyan-400">{campaignStats.total}</p>
+                <p className="text-xs text-zinc-400">Total</p>
+              </div>
+              <div className="meta-panel p-3 text-center">
+                <p className="text-2xl font-bold text-yellow-400">{campaignStats.draft}</p>
+                <p className="text-xs text-zinc-400">Borradores</p>
+              </div>
+              <div className="meta-panel p-3 text-center">
+                <p className="text-2xl font-bold text-green-400">{campaignStats.published}</p>
+                <p className="text-xs text-zinc-400">Publicadas</p>
+              </div>
+              <div className="meta-panel p-3 text-center">
+                <p className="text-2xl font-bold text-gray-400">{campaignStats.archived}</p>
+                <p className="text-xs text-zinc-400">Archivadas</p>
+              </div>
+            </div>
+          )}
+          
+          {/* Saved Campaigns List */}
+          <div className="meta-panel p-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+              <h3 className="text-lg font-medium">Campañas Guardadas</h3>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Buscar campañas..."
+                  className="meta-input w-full sm:w-48"
+                  value={campaignSearch}
+                  onChange={(e) => setCampaignSearch(e.target.value)}
+                />
+                <select 
+                  className="meta-input w-full sm:w-32"
+                  value={campaignFilter}
+                  onChange={(e) => setCampaignFilter(e.target.value as any)}
+                >
+                  <option value="all">Todas</option>
+                  <option value="draft">Borrador</option>
+                  <option value="published">Publicada</option>
+                  <option value="archived">Archivada</option>
+                </select>
+              </div>
+            </div>
+            
+            {filteredCampaigns.length === 0 ? (
+              <div className="text-center text-zinc-400 py-8">
+                {campaigns.length === 0 ? 'No hay campañas guardadas. Genera una campaña con IA.' : 'No hay campañas que coincidan con los filtros.'}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {filteredCampaigns.map(c => (
+                  <div 
+                    key={c.id} 
+                    className={`p-4 bg-white/5 rounded-lg border transition-all cursor-pointer hover:bg-white/10 ${
+                      selectedCampaign?.id === c.id ? 'border-cyan-500/50 bg-cyan-500/10' : 'border-white/10'
+                    }`}
+                    onClick={() => setSelectedCampaign(c)}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h4 className="font-medium truncate flex-1">{c.name || 'Campaña sin nombre'}</h4>
+                      <span className={`text-xs px-2 py-1 rounded ${getStatusColor(c.status)}`}>
+                        {c.status}
+                      </span>
+                    </div>
+                    <p className="text-sm text-zinc-400">{formatCampaignType(c.campaignType)}</p>
+                    <p className="text-xs text-zinc-500 mt-2">{new Date(c.createdAt).toLocaleDateString()}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Campaign Detail Panel */}
+          {selectedCampaign && (
+            <div className="meta-panel p-4 space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <h3 className="text-lg font-medium">Detalles de Campaña</h3>
+                <div className="flex flex-wrap gap-2">
+                  {selectedCampaign.status === 'draft' && (
+                    <button 
+                      onClick={() => updateCampaignStatus(selectedCampaign.id, 'published')}
+                      className="meta-btn-primary text-xs"
+                    >
+                      Publicar
+                    </button>
+                  )}
+                  {selectedCampaign.status === 'published' && (
+                    <button 
+                      onClick={() => updateCampaignStatus(selectedCampaign.id, 'archived')}
+                      className="meta-btn-ghost text-xs"
+                    >
+                      Archivar
+                    </button>
+                  )}
+                  {selectedCampaign.status === 'archived' && (
+                    <button 
+                      onClick={() => updateCampaignStatus(selectedCampaign.id, 'draft')}
+                      className="meta-btn-ghost text-xs"
+                    >
+                      Restaurar
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => deleteCampaign(selectedCampaign.id)}
+                    className="px-3 py-1.5 text-xs rounded border border-red-500/50 text-red-400 hover:bg-red-500/20"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <div><span className="text-zinc-400">Nombre:</span> {selectedCampaign.name || 'Sin nombre'}</div>
+                  <div><span className="text-zinc-400">Tipo:</span> {formatCampaignType(selectedCampaign.campaignType)}</div>
+                  <div><span className="text-zinc-400">Estado:</span> <span className={`px-2 py-0.5 rounded text-xs ${getStatusColor(selectedCampaign.status)}`}>{selectedCampaign.status}</span></div>
+                  <div><span className="text-zinc-400">Creada:</span> {new Date(selectedCampaign.createdAt).toLocaleString()}</div>
+                  <div><span className="text-zinc-400">Actualizada:</span> {new Date(selectedCampaign.updatedAt).toLocaleString()}</div>
+                </div>
+              </div>
+
+              {selectedCampaign.content && (
+                <div className="space-y-3 pt-3 border-t border-white/10">
+                  {selectedCampaign.content.caption && (
+                    <div className="p-3 bg-white/5 rounded">
+                      <label className="block text-xs text-zinc-400 mb-1">Caption:</label>
+                      <p className="text-sm whitespace-pre-wrap">{selectedCampaign.content.caption}</p>
+                      {selectedCampaign.content.hashtags && (
+                        <p className="text-xs text-cyan-400 mt-2">{selectedCampaign.content.hashtags.join(' ')}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedCampaign.content.slides && selectedCampaign.content.slides.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="block text-sm text-zinc-400">Slides:</label>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {selectedCampaign.content.slides.map((slide: any, idx: number) => (
+                          <div key={idx} className="p-2 bg-white/5 rounded text-sm">
+                            <span className="text-cyan-400">#{idx + 1}</span> {slide.hook} - {slide.headline}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedCampaign.content.cta && (
+                    <div className="p-2 bg-purple-500/10 rounded">
+                      <span className="text-purple-400">CTA:</span> {selectedCampaign.content.cta}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -695,12 +1109,26 @@ export default function Dashboard() {
 
       {tab === "automations" && (
         <section className="space-y-4">
-          <div className="meta-panel p-4 flex justify-between items-center">
+          <div className="meta-panel p-4 flex flex-col md:flex-row justify-between items-center gap-3">
             <h2 className="text-xl font-medium">Automatizaciones</h2>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
               <select className="meta-input" value={selectedWs} onChange={(e)=>setSelectedWs(e.target.value)}>
                 <option value="">Selecciona workspace...</option>
                 {workspaces.map(w=> <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+              <select 
+                className="meta-input" 
+                value={automationTriggerType} 
+                onChange={(e)=>setAutomationTriggerType(e.target.value)}
+              >
+                <option value="manual">Manual</option>
+                <option value="new_product">Nuevo Producto</option>
+                <option value="schedule">Programado</option>
+                <option value="low_stock">Stock Bajo</option>
+                <option value="price_change">Cambio de Precio</option>
+                <option value="ai_content">IA Content</option>
+                <option value="engagement">Engagement</option>
+                <option value="trending">Trending</option>
               </select>
               <button onClick={createAutomation} disabled={!ws || loading} className="meta-btn-primary">
                 {loading ? 'Creando...' : 'Nueva Regla'}
@@ -715,8 +1143,8 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-3">
               {automations.map(r => (
-                <div key={r.id} className="meta-panel p-4 flex justify-between items-center">
-                  <div>
+                <div key={r.id} className="meta-panel p-4 flex flex-col md:flex-row justify-between items-center gap-3">
+                  <div className="flex-1">
                     <h3 className="font-medium">{r.name}</h3>
                     <p className="text-sm text-zinc-400">Trigger: {r.triggerType}</p>
                     {r.lastExecutedAt && (
@@ -725,7 +1153,7 @@ export default function Dashboard() {
                   </div>
                   <button
                     onClick={() => toggleAutomation(r.id, r.isActive)}
-                    className={`px-3 py-1 rounded text-sm ${r.isActive ? 'bg-green-600' : 'bg-zinc-600'}`}
+                    className={`px-3 py-1.5 rounded text-sm w-full md:w-auto ${r.isActive ? 'bg-green-600 hover:bg-green-500' : 'bg-zinc-600 hover:bg-zinc-500'}`}
                   >
                     {r.isActive ? 'Activa' : 'Inactiva'}
                   </button>
@@ -738,9 +1166,9 @@ export default function Dashboard() {
 
       {tab === "analytics" && (
         <section className="space-y-4">
-          <div className="meta-panel p-4 flex justify-between items-center">
+          <div className="meta-panel p-4 flex flex-col md:flex-row justify-between items-center gap-3">
             <h2 className="text-xl font-medium">Analytics</h2>
-            <select className="meta-input" value={selectedWs} onChange={(e)=>setSelectedWs(e.target.value)}>
+            <select className="meta-input w-full md:w-64" value={selectedWs} onChange={(e)=>setSelectedWs(e.target.value)}>
               <option value="">Selecciona workspace...</option>
               {workspaces.map(w=> <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
@@ -748,7 +1176,7 @@ export default function Dashboard() {
           
           {!brandProfile ? (
             <div className="meta-panel p-8 text-center space-y-4">
-              <p className="text-zinc-400">No hay perfil de marca analizaro.</p>
+              <p className="text-zinc-400">No hay perfil de marca analizado.</p>
               <button onClick={analyzeBrand} disabled={!ws || loading} className="meta-btn-primary">
                 {loading ? 'Analizando...' : 'Analizar Marca'}
               </button>
@@ -792,7 +1220,7 @@ export default function Dashboard() {
           
           <div className="meta-panel p-4">
             <h3 className="font-medium mb-3">Generar Contenido</h3>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <button onClick={generateMonth} disabled={!ws || loading} className="meta-btn-primary">
                 {loading ? 'Generando...' : 'Generar Mes'}
               </button>

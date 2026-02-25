@@ -75,14 +75,10 @@ export async function POST(request: Request) {
 
     const brandProfile = company.brandProfile;
 
-    if (!brandProfile) {
-      return NextResponse.json({ 
-        error: "Brand profile not found. Run /api/brand-profile first." 
-      }, { status: 404 });
-    }
-
-    // Build context for AI
-    const brandContext = `
+    // Build context for AI - use brand profile if available, otherwise use defaults
+    let brandContext = "";
+    if (brandProfile) {
+      brandContext = `
 BRAND PROFILE:
 - Voice: ${brandProfile.brandVoice}
 - Audience: ${brandProfile.targetAudience}
@@ -92,6 +88,18 @@ BRAND PROFILE:
 - Key Messages: ${brandProfile.keyMessages?.join(", ") || "N/A"}
 - Colors: ${brandProfile.colorPalette?.join(", ") || "N/A"}
 `.trim();
+    } else {
+      brandContext = `
+BRAND PROFILE (Default):
+- Voice: Professional yet friendly
+- Audience: General consumers interested in products/services
+- Style: Modern, clean, minimalist
+- Positioning: Premium quality at accessible prices
+- Tone: Approachable and professional
+- Key Messages: Quality, value, innovation
+- Colors: Blue, white, gray
+`.trim();
+    }
 
     const apiKey = process.env.OPENAI_API_KEY;
 
