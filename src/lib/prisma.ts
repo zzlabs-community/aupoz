@@ -29,7 +29,8 @@ function createPrismaClient(): PrismaClient {
   // Fallback: instantiate with default (will fail at runtime if no DB)
   return new PrismaClient({ log: logLevels } as any);
 }
-verlet client: PrismaClient | undefined = globalForPrisma.prisma;
+
+let client: PrismaClient | undefined = globalForPrisma.prisma;
 if (!client) {
   client = createPrismaClient();
 }
