@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "postinstall": "prisma generate",
-    "start": "HOSTNAME=0.0.0.0 PORT=$PORT node .next/standalone/server.js",
+    "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
