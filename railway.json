@@ -1,18 +1,14 @@
 {
-  "$schema": "https://railway.app/railway.schema.json",
-  "build": {
-    "nixpacks": {
-      "nodeVersion": "20"
-    }
+  "name": "your-project-name",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "next start -p $PORT -H 0.0.0.0",
+    "dev": "next dev",
+    "build": "next build"
   },
-  "deploy": {
-    "numReplicas": 1,
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  },
-  "variables": {
-    "NEXTAUTH_URL": "{{ .Railway.publicHostname }}",
-    "NEXTAUTH_SECRET": "{{ .Secrets.NEXTAUTH_SECRET }}",
-    "OPENAI_API_KEY": "{{ .Secrets.OPENAI_API_KEY }}"
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
   }
 }
