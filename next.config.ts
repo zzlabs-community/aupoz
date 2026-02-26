@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // output: "standalone", // Deshabilitado para Railway - puede causar problemas con archivos estáticos
+  output: "standalone",
   images: {
-    unoptimized: true, // Necesario para algunos despliegues
+    unoptimized: true,
   },
 };
 
